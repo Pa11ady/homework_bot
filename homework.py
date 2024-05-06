@@ -54,8 +54,9 @@ def get_api_answer(timestamp):
                                 params={'from_date': timestamp})
         if response.status_code != 200:
             raise ApiError(response)
-    except Exception as error:
+    except requests.RequestException as error:
         logging.error(f'Ошибка при запросе API: {error}')
+        raise ApiError(error)
     return response.json()
 
 
@@ -64,17 +65,24 @@ def check_response(response):
     message = ''
     if not response:
         message = "Пустой словарь."
-    elif not isinstance(response, dict):
-        message = 'Тип не словарь.'
-    elif "homeworks" not in response:
-        message = 'Отсутствует ключ "homeworks".'
-    elif not isinstance(response.get("homeworks"), list):
-        message = "Должен быть список."
-    elif not response.get("homeworks"):
-        message = "Пустой список работ."
-    if message != '':
         logging.error(message)
-        raise ResponseError(message)
+        raise KeyError(message)
+    if not isinstance(response, dict):
+        message = 'Тип не словарь.'
+        logging.error(message)
+        raise TypeError(message)
+    if "homeworks" not in response:
+        message = 'Отсутствует ключ "homeworks".'
+        logging.error(message)
+        raise KeyError(message)
+    if not isinstance(response.get("homeworks"), list):
+        message = "Должен быть список."
+        logging.error(message)
+        raise TypeError(message)
+    if not response.get("homeworks"):
+        message = "Пустой список работ."
+        logging.error(message)
+        raise KeyError(message)
 
 
 def parse_status(homework):
@@ -126,5 +134,5 @@ def main():
             time.sleep(RETRY_PERIOD)
 
 
-if __name__ == '__main__':  
+if __name__ == '__main__':
     main()
