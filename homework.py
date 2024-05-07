@@ -2,6 +2,7 @@ import logging
 import os
 import sys
 import time
+from http import HTTPStatus
 
 import requests
 from dotenv import load_dotenv
@@ -24,7 +25,6 @@ RETRY_PERIOD = 600
 ENDPOINT = 'https://practicum.yandex.ru/api/user_api/homework_statuses/'
 HEADERS = {'Authorization': f'OAuth {PRACTICUM_TOKEN}'}
 
-
 HOMEWORK_VERDICTS = {
     'approved': 'Работа проверена: ревьюеру всё понравилось. Ура!',
     'reviewing': 'Работа взята на проверку ревьюером.',
@@ -34,55 +34,45 @@ HOMEWORK_VERDICTS = {
 
 def check_tokens():
     """Проверяет доступность переменных окружения."""
-    if not (PRACTICUM_TOKEN and TELEGRAM_TOKEN and TELEGRAM_CHAT_ID):
+    if not all([PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID]):
         raise MissingEnvironmentVariable()
 
 
 def send_message(bot, message):
     """Отправляет сообщение в Telegram."""
     try:
-        logging.debug(f"Бот отправил сообщение {message}")
         bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=message)
+        logging.debug(f"Бот отправил сообщение {message}")
     except Exception as error:
         logging.error(error)
 
 
 def get_api_answer(timestamp):
     """Отправляет запрос к ручке API-сервиса Практикум.Домашка."""
+    params = {'from_date': timestamp}
     try:
         response = requests.get(ENDPOINT, headers=HEADERS,
-                                params={'from_date': timestamp})
-        if response.status_code != 200:
-            raise ApiError(response)
-    except requests.RequestException as error:
-        logging.error(f'Ошибка при запросе API: {error}')
-        raise ApiError(error)
+                                params=params)
+        if response.status_code != HTTPStatus.OK:
+            message = (
+                f'Неверный статус при запросе: {ENDPOINT} c params={params};'
+                f'{response.status_code}; {response.content}'
+            )
+            raise ApiError(message)
+    except requests.RequestException:
+        message = f'Ошибка при запросе API: {ENDPOINT} c params={params}'
+        raise ApiError(message)
     return response.json()
 
 
 def check_response(response):
     """Проверяет ответ API."""
-    message = ''
-    if not response:
-        message = "Пустой словарь."
-        logging.error(message)
-        raise KeyError(message)
     if not isinstance(response, dict):
-        message = 'Тип не словарь.'
-        logging.error(message)
-        raise TypeError(message)
-    if "homeworks" not in response:
-        message = 'Отсутствует ключ "homeworks".'
-        logging.error(message)
-        raise KeyError(message)
-    if not isinstance(response.get("homeworks"), list):
-        message = "Должен быть список."
-        logging.error(message)
-        raise TypeError(message)
-    if not response.get("homeworks"):
-        message = "Пустой список работ."
-        logging.error(message)
-        raise KeyError(message)
+        raise TypeError('Тип не словарь.')
+    if 'homeworks' not in response:
+        raise KeyError('Отсутствует ключ homeworks.')
+    if not isinstance(response.get('homeworks'), list):
+        raise TypeError('Должен быть список.')
 
 
 def parse_status(homework):
@@ -90,12 +80,13 @@ def parse_status(homework):
     homework_name = homework.get('homework_name')
     if not homework_name:
         message = 'Не найден ключ homework_name'
-        logging.error(message)
         raise ResponseError(message)
-    status = homework['status']
+    status = homework.get('status')
+    if not status:
+        message = 'Не найден ключ status'
+        raise ResponseError(message)
     if status not in HOMEWORK_VERDICTS:
         message = f'Неизвестный статус: {status}'
-        logging.error(message)
         raise ResponseError(message)
     verdict = HOMEWORK_VERDICTS[status]
     return f'Изменился статус проверки работы "{homework_name}". {verdict}'
@@ -112,13 +103,16 @@ def main():
     # Создаем объект класса бота
     bot = TeleBot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
+    message = ''
     prev_message = ''
     while True:
         try:
             response = get_api_answer(timestamp)
+            timestamp = response["current_date"]
             check_response(response)
-            homework = response['homeworks'][0]
-            message = parse_status(homework)
+            homeworks = response['homeworks']
+            if homeworks:
+                message = parse_status(homeworks[0])
             if message != prev_message:
                 send_message(bot, message)
                 prev_message = message
